@@ -19,6 +19,26 @@ export function supportsDataGridTransaction(databaseType: DatabaseType | undefin
   return databaseType !== "hive";
 }
 
+export function canEditExistingTableRows(
+  databaseType: DatabaseType | undefined,
+  hiveTableTransactional?: boolean,
+): boolean {
+  if (databaseType === "hive") return hiveTableTransactional === true;
+  return true;
+}
+
+export function hiveTablePropertiesIndicateTransactional(result: { rows: readonly (readonly unknown[])[] }): boolean {
+  return result.rows.some((row) => {
+    const name = String(row[0] ?? "")
+      .trim()
+      .toLowerCase();
+    const value = String(row[1] ?? "")
+      .trim()
+      .toLowerCase();
+    return name === "transactional" && value === "true";
+  });
+}
+
 export function usesSyntheticRowIdKey(databaseType: DatabaseType | undefined, primaryKeys: string[]): boolean {
   return (
     primaryKeys.length === 1 &&

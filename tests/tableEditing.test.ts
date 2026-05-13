@@ -3,7 +3,9 @@ import test from "node:test";
 import {
   DBX_NEO4J_ELEMENT_ID_COLUMN,
   DBX_ROWID_COLUMN,
+  canEditExistingTableRows,
   editablePrimaryKeys,
+  hiveTablePropertiesIndicateTransactional,
   isHiddenGridColumn,
   isTableDataEditable,
   supportsDataGridTransaction,
@@ -43,6 +45,30 @@ test("allows Hive table data editing even without declared primary keys", () => 
 test("does not use transactional grid saves for Hive", () => {
   assert.equal(supportsDataGridTransaction("hive"), false);
   assert.equal(supportsDataGridTransaction("postgres"), true);
+});
+
+test("allows existing row edits for Hive only when the table is transactional", () => {
+  assert.equal(canEditExistingTableRows("hive", true), true);
+  assert.equal(canEditExistingTableRows("hive", false), false);
+  assert.equal(canEditExistingTableRows("hive", undefined), false);
+  assert.equal(canEditExistingTableRows("postgres", undefined), true);
+});
+
+test("detects transactional Hive table properties", () => {
+  assert.equal(
+    hiveTablePropertiesIndicateTransactional({
+      columns: ["prpt_name", "prpt_value"],
+      rows: [["transactional", "true"]],
+    }),
+    true,
+  );
+  assert.equal(
+    hiveTablePropertiesIndicateTransactional({
+      columns: ["prpt_name", "prpt_value"],
+      rows: [["Table testdb.departments does not have property: transactional", null]],
+    }),
+    false,
+  );
 });
 
 test("uses elementId as Neo4j editable key when labels have no primary key", () => {

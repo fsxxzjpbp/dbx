@@ -50,6 +50,7 @@ export interface UseDataGridEditorOptions {
       }
     | undefined
   >;
+  canEditExistingRows?: ComputedRef<boolean>;
   onExecuteSql: ComputedRef<((sql: string) => Promise<void>) | undefined>;
   customSave?: ComputedRef<
     | ((changes: {
@@ -94,6 +95,7 @@ export function useDataGridEditor(options: UseDataGridEditorOptions) {
     connectionId,
     database,
     tableMeta,
+    canEditExistingRows = computed(() => true),
     onExecuteSql,
     customSave,
     sql,
@@ -256,6 +258,7 @@ export function useDataGridEditor(options: UseDataGridEditorOptions) {
     if (!editable.value) return;
     const item = getRowItem(rowId);
     if (!item || item.isDeleted) return;
+    if (!item.isNew && !canEditExistingRows.value) return;
     isCancelling = false;
     editingCell.value = { rowId, col: colIdx };
     const val = item?.data[colIdx] ?? null;
@@ -291,6 +294,10 @@ export function useDataGridEditor(options: UseDataGridEditorOptions) {
       editingCell.value = null;
       return;
     }
+    if (!canEditExistingRows.value) {
+      editingCell.value = null;
+      return;
+    }
 
     const oldVal = result.value.rows[item.sourceIndex]?.[col];
     const newVal = coerceCellValue(editValue.value, oldVal);
@@ -320,6 +327,7 @@ export function useDataGridEditor(options: UseDataGridEditorOptions) {
     }
 
     if (item.sourceIndex === undefined) return;
+    if (!canEditExistingRows.value) return;
 
     const oldVal = result.value.rows[item.sourceIndex]?.[col];
     const newVal = value === null ? null : coerceCellValue(value, oldVal);
@@ -410,6 +418,7 @@ export function useDataGridEditor(options: UseDataGridEditorOptions) {
     if (item.isNew && item.newIndex !== undefined) {
       newRows.value.splice(item.newIndex, 1);
     } else if (item.sourceIndex !== undefined) {
+      if (!canEditExistingRows.value) return;
       dirtyRows.value.delete(item.sourceIndex);
       deletedRows.value.add(item.sourceIndex);
     }

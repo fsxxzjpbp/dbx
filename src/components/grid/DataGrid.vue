@@ -68,7 +68,12 @@ import {
   normalizeWhereInput,
   quoteTableIdentifier,
 } from "@/lib/tableSelectSql";
-import { isHiddenGridColumn, usesSyntheticRowIdKey } from "@/lib/tableEditing";
+import {
+  canEditExistingTableRows,
+  hiveTablePropertiesIndicateTransactional,
+  isHiddenGridColumn,
+  usesSyntheticRowIdKey,
+} from "@/lib/tableEditing";
 import { formatGridSqlLiteral } from "@/lib/dataGridSql";
 import { matchesRowStatusFilter, type RowStatus, type RowStatusFilter } from "@/lib/gridRowStatus";
 import { displayCellValue, type CellValue } from "@/lib/cellValue";
@@ -806,6 +811,34 @@ const canUseWhereSearch = computed(() => !!props.tableMeta && !!props.onExecuteS
 const tableUsesSyntheticRowId = computed(() =>
   usesSyntheticRowIdKey(props.databaseType, props.tableMeta?.primaryKeys ?? []),
 );
+const hiveTableTransactional = ref<boolean | undefined>(undefined);
+const canEditExistingRows = computed(() => canEditExistingTableRows(props.databaseType, hiveTableTransactional.value));
+watch(
+  () => [props.databaseType, props.connectionId, props.database, props.tableMeta?.schema, props.tableMeta?.tableName],
+  async () => {
+    if (props.databaseType !== "hive" || !props.connectionId || !props.database || !props.tableMeta) {
+      hiveTableTransactional.value = undefined;
+      return;
+    }
+    const table = qualifiedTableName({
+      databaseType: "hive",
+      schema: props.tableMeta.schema,
+      tableName: props.tableMeta.tableName,
+    });
+    try {
+      const result = await api.executeQuery(
+        props.connectionId,
+        props.database,
+        `SHOW TBLPROPERTIES ${table} ('transactional')`,
+        props.tableMeta.schema,
+      );
+      hiveTableTransactional.value = hiveTablePropertiesIndicateTransactional(result);
+    } catch {
+      hiveTableTransactional.value = false;
+    }
+  },
+  { immediate: true },
+);
 const clientSearchText = computed(() => (searchText.value.trim() ? searchText.value : ""));
 watch(clientSearchText, (value) => {
   clearTimeout(_searchTimer);
@@ -899,6 +932,7 @@ const editor = useDataGridEditor({
   connectionId: computed(() => props.connectionId),
   database: computed(() => props.database),
   tableMeta: computed(() => props.tableMeta),
+  canEditExistingRows,
   onExecuteSql: computed(() => props.onExecuteSql),
   customSave: computed(() => props.customSave),
   sql: computed(() => props.sql),
@@ -951,6 +985,14 @@ const {
   clearResetScrollAfterResult,
   cleanupFrames,
 } = editor;
+
+function canEditRowItem(item: RowItem | undefined): boolean {
+  return !!props.editable && !!item && !item.isDeleted && (item.isNew || canEditExistingRows.value);
+}
+
+function canDeleteRowItem(item: RowItem | undefined): boolean {
+  return !!props.editable && !!item && !item.isDeleted && (item.isNew || canEditExistingRows.value);
+}
 
 async function onToolbarRefresh() {
   if (transactionActive.value) {
@@ -1186,7 +1228,7 @@ const activeCellDetail = computed(() => {
     rawValue,
     length: value === null ? 0 : String(value).length,
     formattedJson,
-    isEditable: props.editable && !item.isDeleted,
+    isEditable: canEditRowItem(item),
   };
 });
 
@@ -1216,6 +1258,7 @@ function commitDetailEdit() {
   }
 
   if (item.sourceIndex === undefined) return;
+  if (!canEditExistingRows.value) return;
 
   const oldVal = props.result.rows[item.sourceIndex]?.[detail.colIndex];
   const newVal = coerceCellValue(detailEditValue.value, oldVal);
@@ -1253,6 +1296,7 @@ function setDetailNull() {
   }
 
   if (item.sourceIndex === undefined) return;
+  if (!canEditExistingRows.value) return;
   if (!dirtyRows.value.has(item.sourceIndex)) dirtyRows.value.set(item.sourceIndex, new Map());
   dirtyRows.value.get(item.sourceIndex)!.set(detail.colIndex, null);
   dirtyRows.value = new Map(dirtyRows.value);
@@ -2331,12 +2375,12 @@ defineExpose({
                         'bg-yellow-500/10': item.isDirtyCol[actualColIdx],
                         'cell-selected': cellIsSelected(index, visibleColIdx),
                         'tabular-nums': typeof item.data[actualColIdx] === 'number',
-                        'cursor-text hover:bg-accent/50': editable && !item.isDeleted,
+                        'cursor-text hover:bg-accent/50': canEditRowItem(item),
                         'line-through': item.isDeleted,
                       }"
                       @mousedown="handleDataCellMousedown(index, visibleColIdx, item.id, $event)"
                       @mouseenter="extendCellSelection(index, visibleColIdx)"
-                      @dblclick="editable && !item.isDeleted && startEdit(item.id, actualColIdx)"
+                      @dblclick="canEditRowItem(item) && startEdit(item.id, actualColIdx)"
                       @contextmenu="onCellContext(item.id, index, actualColIdx, visibleColIdx)"
                     >
                       <template v-if="editingCell?.rowId === item.id && editingCell?.col === actualColIdx">
@@ -2664,7 +2708,7 @@ defineExpose({
             {{ isMultiRow ? t("grid.restoreRows", { count: multiRowCount }) : t("grid.restoreRow") }}
           </ContextMenuItem>
           <ContextMenuItem
-            v-else
+            v-else-if="canDeleteRowItem(contextRowItem)"
             class="text-destructive"
             @click="isMultiRow ? requestDeleteRows(affectedRowIds()) : requestDeleteRow(contextRowItem.id)"
           >
