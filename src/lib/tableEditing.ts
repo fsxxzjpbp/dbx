@@ -13,7 +13,9 @@ export function editablePrimaryKeys(databaseType: DatabaseType | undefined, colu
 }
 
 export function isTableDataEditable(databaseType: DatabaseType | undefined, primaryKeys: string[]): boolean {
-  if (getDatabaseCapability(databaseType).tableData.insert) return true;
+  const cap = getDatabaseCapability(databaseType).tableData;
+  if (cap.readonly) return false;
+  if (cap.insert) return true;
   return primaryKeys.length > 0;
 }
 
@@ -27,6 +29,7 @@ export function canEditExistingTableRows(
   primaryKeys?: string[],
 ): boolean {
   const tableData = getDatabaseCapability(databaseType).tableData;
+  if (tableData.readonly) return false;
   if (tableData.requiresTransactionalTableForExistingRows && hiveTableTransactional !== true) return false;
   if (tableData.updateRequiresPrimaryKey && primaryKeys && primaryKeys.length === 0) return false;
   return true;
