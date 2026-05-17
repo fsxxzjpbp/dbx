@@ -17,12 +17,13 @@ on:
 permissions:
   contents: write
   id-token: write
+  pull-requests: write
 
 jobs:
-  publish:
-    name: Bump patch and publish MCP server
+  create-release-pr:
+    name: Create MCP release PR
     runs-on: ubuntu-latest
-    if: github.actor != 'github-actions[bot]' && (github.event_name == 'workflow_dispatch' || !contains(github.event.head_commit.message, '[skip mcp-release]'))
+    if: github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && !contains(github.event.head_commit.message, '[skip mcp-release]'))
 
     steps:
       - uses: actions/checkout@v4
@@ -42,42 +43,41 @@ jobs:
           cache: pnpm
           cache-dependency-path: mcp/pnpm-lock.yaml
 
-      - name: Check npm token
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+      - name: Check current MCP version
+        id: current
         run: |
-          if [ -z "${NODE_AUTH_TOKEN}" ]; then
-            echo "::error::NPM_TOKEN secret is required to publish @dbx-app/mcp-server."
-            exit 1
-          fi
-
-      - name: Check release token
-        env:
-          RELEASE_TOKEN: ${{ secrets.MCP_RELEASE_TOKEN }}
-        run: |
-          if [ -z "${RELEASE_TOKEN}" ]; then
-            echo "::error::MCP_RELEASE_TOKEN secret is required to push the MCP release commit and tag because main is protected."
-            exit 1
+          VERSION="$(node -p "require('./mcp/package.json').version")"
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          if npm view "@dbx-app/mcp-server@${VERSION}" version >/dev/null 2>&1; then
+            echo "published=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "published=false" >> "$GITHUB_OUTPUT"
+            echo "Current MCP version ${VERSION} is not published yet; skipping release PR creation."
           fi
 
       - name: Install native build dependencies
+        if: steps.current.outputs.published == 'true'
         run: |
           sudo apt-get update
           sudo apt-get install -y libsecret-1-dev
 
       - name: Install dependencies
+        if: steps.current.outputs.published == 'true'
         working-directory: mcp
         run: pnpm install --frozen-lockfile
 
       - name: Run MCP tests
+        if: steps.current.outputs.published == 'true'
         working-directory: mcp
         run: pnpm test
 
       - name: Build MCP server
+        if: steps.current.outputs.published == 'true'
         working-directory: mcp
         run: pnpm build
 
       - name: Bump MCP patch version
+        if: steps.current.outputs.published == 'true'
         id: version
         run: |
           node <<'NODE'
@@ -124,6 +124,7 @@ jobs:
           NODE
 
       - name: Check npm version is new
+        if: steps.current.outputs.published == 'true'
         working-directory: mcp
         run: |
           VERSION="${{ steps.version.outputs.version }}"
@@ -133,31 +134,160 @@ jobs:
           fi
 
       - name: Pack MCP package
+        if: steps.current.outputs.published == 'true'
         working-directory: mcp
         run: npm pack --dry-run
 
       - name: Configure git author
+        if: steps.current.outputs.published == 'true'
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
-      - name: Commit MCP release version
+      - name: Push release branch
+        if: steps.current.outputs.published == 'true'
         run: |
           VERSION="${{ steps.version.outputs.version }}"
+          BRANCH="codex/mcp-release-${VERSION}"
+          git checkout -B "${BRANCH}"
           git add mcp/package.json mcp/package-lock.json mcp/server.json
           git commit -m "chore(mcp): release ${VERSION} [skip mcp-release]"
-          git tag "mcp-v${VERSION}"
+          git push --force-with-lease origin "${BRANCH}"
 
-      - name: Push MCP release commit and tag
+      - name: Create or update release PR
+        if: steps.current.outputs.published == 'true'
         env:
-          RELEASE_TOKEN: ${{ secrets.MCP_RELEASE_TOKEN }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           VERSION="${{ steps.version.outputs.version }}"
-          git remote set-url origin "https://x-access-token:${RELEASE_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
-          git push origin HEAD:main
-          git push origin "mcp-v${VERSION}"
+          BRANCH="codex/mcp-release-${VERSION}"
+          TITLE="chore(mcp): release ${VERSION}"
+          BODY="Automated MCP patch release PR. Merge this PR to publish @dbx-app/mcp-server@${VERSION}."
+
+          if gh pr view "${BRANCH}" --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
+            gh pr edit "${BRANCH}" \
+              --repo "${GITHUB_REPOSITORY}" \
+              --title "${TITLE}" \
+              --body "${BODY}"
+          else
+            gh pr create \
+              --repo "${GITHUB_REPOSITORY}" \
+              --base main \
+              --head "${BRANCH}" \
+              --title "${TITLE}" \
+              --body "${BODY}"
+          fi
+
+  publish:
+    name: Publish MCP server
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push'
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          registry-url: https://registry.npmjs.org
+          cache: pnpm
+          cache-dependency-path: mcp/pnpm-lock.yaml
+
+      - name: Check current MCP version
+        id: current
+        run: |
+          VERSION="$(node -p "require('./mcp/package.json').version")"
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          if npm view "@dbx-app/mcp-server@${VERSION}" version >/dev/null 2>&1; then
+            echo "should_publish=false" >> "$GITHUB_OUTPUT"
+            echo "Current MCP version ${VERSION} is already published; skipping npm publish."
+          else
+            echo "should_publish=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Check npm token
+        if: steps.current.outputs.should_publish == 'true'
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          if [ -z "${NODE_AUTH_TOKEN}" ]; then
+            echo "::error::NPM_TOKEN secret is required to publish @dbx-app/mcp-server."
+            exit 1
+          fi
+
+      - name: Install native build dependencies
+        if: steps.current.outputs.should_publish == 'true'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libsecret-1-dev
+
+      - name: Install dependencies
+        if: steps.current.outputs.should_publish == 'true'
+        working-directory: mcp
+        run: pnpm install --frozen-lockfile
+
+      - name: Run MCP tests
+        if: steps.current.outputs.should_publish == 'true'
+        working-directory: mcp
+        run: pnpm test
+
+      - name: Build MCP server
+        if: steps.current.outputs.should_publish == 'true'
+        working-directory: mcp
+        run: pnpm build
+
+      - name: Read MCP version
+        if: steps.current.outputs.should_publish == 'true'
+        id: version
+        run: |
+          VERSION="$(node -p "require('./mcp/package.json').version")"
+          SERVER_VERSION="$(node -p "require('./mcp/server.json').version")"
+          SERVER_PACKAGE_VERSION="$(node -p "require('./mcp/server.json').packages.find((pkg) => pkg.identifier === '@dbx-app/mcp-server').version")"
+
+          if [ "${VERSION}" != "${SERVER_VERSION}" ] || [ "${VERSION}" != "${SERVER_PACKAGE_VERSION}" ]; then
+            echo "::error::MCP package and server metadata versions are not synchronized."
+            exit 1
+          fi
+
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+
+      - name: Check npm version is new
+        if: steps.current.outputs.should_publish == 'true'
+        working-directory: mcp
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          if npm view "@dbx-app/mcp-server@${VERSION}" version >/dev/null 2>&1; then
+            echo "::error::@dbx-app/mcp-server@${VERSION} already exists on npm."
+            exit 1
+          fi
+
+      - name: Pack MCP package
+        if: steps.current.outputs.should_publish == 'true'
+        working-directory: mcp
+        run: npm pack --dry-run
+
+      - name: Create and push MCP tag
+        if: steps.current.outputs.should_publish == 'true'
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          TAG="mcp-v${VERSION}"
+          if git rev-parse "${TAG}" >/dev/null 2>&1; then
+            echo "::error::Tag ${TAG} already exists."
+            exit 1
+          fi
+          git tag "${TAG}"
+          git push origin "${TAG}"
 
       - name: Publish MCP package to npm
+        if: steps.current.outputs.should_publish == 'true'
         working-directory: mcp
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
