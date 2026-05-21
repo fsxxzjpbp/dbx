@@ -163,6 +163,7 @@ export interface EditorSettings {
   theme: EditorTheme;
   executeMode: "all" | "current";
   wordWrap: boolean;
+  compactTabTitle: boolean;
   appLayout: "separated" | "classic";
   pageSize: number;
   redisScanPageSize: number;
@@ -201,6 +202,7 @@ export const DEFAULT_EDITOR_SETTINGS: EditorSettings = {
   theme: "one-dark",
   executeMode: "all",
   wordWrap: false,
+  compactTabTitle: false,
   appLayout: "classic",
   pageSize: 100,
   redisScanPageSize: 1000,
@@ -241,6 +243,7 @@ export function normalizeEditorSettings(settings: Partial<EditorSettings>): Edit
     theme: settings.theme ?? DEFAULT_EDITOR_SETTINGS.theme,
     executeMode: settings.executeMode ?? DEFAULT_EDITOR_SETTINGS.executeMode,
     wordWrap: settings.wordWrap ?? DEFAULT_EDITOR_SETTINGS.wordWrap,
+    compactTabTitle: settings.compactTabTitle ?? DEFAULT_EDITOR_SETTINGS.compactTabTitle,
     appLayout: settings.appLayout ?? DEFAULT_EDITOR_SETTINGS.appLayout,
     pageSize: normalizeResultPageSize(settings.pageSize),
     redisScanPageSize: settings.redisScanPageSize ?? DEFAULT_EDITOR_SETTINGS.redisScanPageSize,

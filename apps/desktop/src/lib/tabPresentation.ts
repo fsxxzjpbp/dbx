@@ -1,5 +1,6 @@
 import { useI18n } from "vue-i18n";
 import { useConnectionStore } from "@/stores/connectionStore";
+import { useSettingsStore } from "@/stores/settingsStore";
 import type { QueryTab } from "@/types/database";
 
 export function connectionDisplayName(connectionId: string): string {
@@ -28,22 +29,32 @@ export function isPreviewTab(tab: QueryTab): boolean {
 
 export function tabDisplayTitle(tab: QueryTab): string {
   const database = databaseDisplayNameForTab(tab.connectionId, tab.database);
+  const settingsStore = useSettingsStore();
+  const compact = settingsStore.editorSettings.compactTabTitle;
   if (isPreviewTab(tab)) return tab.title;
   if (tab.mode === "data" && tab.tableMeta?.tableName) {
-    const suffix = tab.tableMeta.schema ? `@${database}.${tab.tableMeta.schema}` : `@${database}`;
+    if (compact) return tab.tableMeta.tableName;
+    const suffix =
+      tab.tableMeta.schema && tab.tableMeta.schema !== tab.database
+        ? `@${database}.${tab.tableMeta.schema}`
+        : `@${database}`;
     return `${tab.tableMeta.tableName}${suffix}`;
   }
   if (tab.mode === "query") {
+    if (compact) return connectionDisplayName(tab.connectionId);
     return `${connectionDisplayName(tab.connectionId)}@${database}`;
   }
   if (tab.mode === "mongo" && tab.sql) {
+    if (compact) return tab.sql;
     return `${tab.sql}@${database}`;
   }
   if (tab.mode === "redis") {
+    if (compact) return connectionDisplayName(tab.connectionId);
     return `${connectionDisplayName(tab.connectionId)}@${database}`;
   }
   if (tab.mode === "objects") {
     const schema = tab.objectBrowser?.schema;
+    if (compact) return schema || tab.title;
     return schema ? `${schema}@${database}` : `${tab.title}@${database}`;
   }
   return tab.title;

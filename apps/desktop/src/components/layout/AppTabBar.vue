@@ -1,7 +1,7 @@
 <script setup lang="ts">
-import { ref, watch, nextTick } from "vue";
+import { computed, ref, watch, nextTick } from "vue";
 import { useI18n } from "vue-i18n";
-import { X, Pin, ChevronRight, Table2, Code2, TableProperties, Package } from "lucide-vue-next";
+import { X, Pin, ChevronRight, Table2, Code2, TableProperties, Package, Check } from "lucide-vue-next";
 import {
   ContextMenu,
   ContextMenuContent,
@@ -30,6 +30,16 @@ const emit = defineEmits<{
 const { t } = useI18n();
 const queryStore = useQueryStore();
 const settingsStore = useSettingsStore();
+const compactTabTitle = computed({
+  get: () => settingsStore.editorSettings.compactTabTitle,
+  set: (checked: boolean | "indeterminate") => {
+    settingsStore.updateEditorSettings({ compactTabTitle: checked === true });
+  },
+});
+
+function toggleCompactTabTitle() {
+  compactTabTitle.value = !compactTabTitle.value;
+}
 
 const tabsContainerRef = ref<HTMLElement | null>(null);
 const { canScrollLeft, canScrollRight, updateScrollButtons, scrollTabs } = useTabScroll(tabsContainerRef);
@@ -196,6 +206,11 @@ function tabIconClass(tab: QueryTab) {
         </ContextMenuTrigger>
 
         <ContextMenuContent class="w-44">
+          <ContextMenuItem @click="toggleCompactTabTitle">
+            <Check class="w-3.5 h-3.5 mr-2" :class="compactTabTitle ? 'opacity-100' : 'opacity-0'" />
+            {{ t("contextMenu.compactTabTitle") }}
+          </ContextMenuItem>
+          <ContextMenuSeparator />
           <ContextMenuItem @click="queryStore.togglePinnedTab(tab.id)">
             <Pin class="w-3.5 h-3.5 mr-2" :class="{ 'fill-current': tab.pinned }" />
             {{ tab.pinned ? t("contextMenu.unpin") : t("contextMenu.pin") }}

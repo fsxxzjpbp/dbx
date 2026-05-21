@@ -679,6 +679,7 @@ export default {
     pin: "Pin",
     unpin: "Unpin",
     refreshTab: "Refresh Data",
+    compactTabTitle: "Shorten Tab Titles",
     closeTab: "Close Tab",
     closeOtherTabs: "Close Other Tabs",
     closeAllTabs: "Close All Tabs",
