@@ -124,6 +124,14 @@ fn mysql_value_to_json(row: &mysql_async::Row, idx: usize) -> serde_json::Value 
                 .map(|v: Decimal| serde_json::Value::String(v.to_string()))
                 .unwrap_or(serde_json::Value::Null);
         }
+        ColumnType::MYSQL_TYPE_BIT => {
+            return row_get::<Vec<u8>, _>(row, idx)
+                .map(|bytes| {
+                    let val = bytes.iter().fold(0u64, |acc, &b| (acc << 8) | b as u64);
+                    serde_json::Value::String(val.to_string())
+                })
+                .unwrap_or(serde_json::Value::Null);
+        }
         ColumnType::MYSQL_TYPE_TIMESTAMP
         | ColumnType::MYSQL_TYPE_TIMESTAMP2
         | ColumnType::MYSQL_TYPE_DATETIME
