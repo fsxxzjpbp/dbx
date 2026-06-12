@@ -229,6 +229,14 @@ function appendAssistantReasoning(assistantIdx: number, delta: string) {
 }
 
 const expandedReasoning = ref<Set<number>>(new Set());
+const expandedSteps = ref<Set<string>>(new Set());
+
+function toggleStep(key: string) {
+  const next = new Set(expandedSteps.value);
+  if (next.has(key)) next.delete(key);
+  else next.add(key);
+  expandedSteps.value = next;
+}
 
 function agentStepIcon(tone: AiAgentStepTone) {
   if (tone === "danger") return CircleSlash;
@@ -252,11 +260,15 @@ function agentStepClass(tone: AiAgentStepTone): string {
   }
 }
 
-function agentStepTitle(step: AiAgentStepItem): string {
-  if (step.titleKey) return t(step.titleKey, step.titleParams || {});
-  const tool = step.titleParams?.tool;
-  if (tool) return `${t(step.labelKey)}: ${tool}`;
-  return t(step.labelKey);
+/** Extract tool result content from the AgentEvent result value */
+function extractToolResultContent(result: unknown): string | undefined {
+  if (!result) return undefined;
+  if (typeof result === "string") return result;
+  if (typeof result === "object" && result !== null && "content" in result) {
+    const content = (result as Record<string, unknown>).content;
+    return typeof content === "string" ? content : JSON.stringify(content);
+  }
+  return JSON.stringify(result);
 }
 
 function toggleReasoning(index: number) {
@@ -527,6 +539,10 @@ async function send() {
                 tone: (e.type === "tool_call_start" ? "active" : e.is_error ? "danger" : "success") as AiAgentStepTone,
                 titleKey: undefined,
                 titleParams: { tool: e.tool_name || "" },
+                toolName: e.tool_name,
+                toolArgs: e.type === "tool_call_start" ? (e.args as Record<string, unknown>) : undefined,
+                toolResult: e.type === "tool_call_end" && !e.is_error ? extractToolResultContent(e.result) : undefined,
+                isError: e.type === "tool_call_end" ? e.is_error : undefined,
               }));
             msg.agentSteps = steps;
           }
@@ -552,6 +568,10 @@ async function send() {
           tone: e.type === "tool_call_start" ? "active" : e.is_error ? "danger" : "success",
           titleKey: undefined,
           titleParams: { tool: e.tool_name || "" },
+          toolName: e.tool_name,
+          toolArgs: e.type === "tool_call_start" ? (e.args as Record<string, unknown>) : undefined,
+          toolResult: e.type === "tool_call_end" && !e.is_error ? extractToolResultContent(e.result) : undefined,
+          isError: e.type === "tool_call_end" ? e.is_error : undefined,
         }));
     }
     // Fallback: use aiAgentPlan for backward compatibility
@@ -774,11 +794,20 @@ const messageRenderer = computed(() => {
                   </div>
                 </div>
               </div>
-              <div v-if="msg.agentSteps?.length" class="mb-2 flex flex-wrap gap-1.5">
-                <span v-for="step in msg.agentSteps" :key="step.key" class="inline-flex h-5 max-w-full items-center gap-1 rounded-full border px-1.5 text-[10px] font-medium" :class="agentStepClass(step.tone)" :title="agentStepTitle(step)">
-                  <component :is="agentStepIcon(step.tone)" class="h-3 w-3 shrink-0" />
-                  <span class="truncate">{{ t(step.labelKey) }}</span>
-                </span>
+              <div v-if="msg.agentSteps?.length" class="mb-2 space-y-1">
+                <div v-for="step in msg.agentSteps" :key="step.key" class="rounded border text-[10px]" :class="agentStepClass(step.tone)">
+                  <button class="flex w-full items-center gap-1 px-2 py-1.5 text-left" @click="step.toolResult || step.toolArgs?.sql ? toggleStep(step.key) : undefined">
+                    <component :is="agentStepIcon(step.tone)" class="h-3 w-3 shrink-0" />
+                    <span class="font-medium">{{ t(step.labelKey) }}</span>
+                    <span v-if="step.toolName" class="text-muted-foreground">: {{ step.toolName }}</span>
+                    <ChevronRight v-if="step.toolResult || step.toolArgs?.sql" class="ml-auto h-3 w-3 shrink-0 transition-transform duration-150" :class="{ 'rotate-90': expandedSteps.has(step.key) }" />
+                  </button>
+                  <div v-if="expandedSteps.has(step.key)" class="border-t border-current/10 px-2 pb-2 pt-1">
+                    <div v-if="step.toolArgs?.sql" class="mb-1 rounded bg-background/50 px-2 py-1 font-mono text-[10px] text-foreground/80 whitespace-pre-wrap">{{ step.toolArgs.sql }}</div>
+                    <div v-if="step.isError && step.toolResult" class="text-[10px] text-red-600 dark:text-red-400">{{ step.toolResult }}</div>
+                    <div v-else-if="step.toolResult" class="max-h-48 overflow-auto text-[10px] text-muted-foreground whitespace-pre-wrap">{{ step.toolResult }}</div>
+                  </div>
+                </div>
               </div>
               <template v-for="(seg, j) in messageRenderer.render(msg.content)" :key="j">
                 <div v-if="seg.type === 'text'" class="ai-markdown whitespace-normal">
@@ -825,7 +854,14 @@ const messageRenderer = computed(() => {
         <div v-if="connectionStore.connections.length" class="flex items-center gap-1 mb-1 text-xs text-foreground/80">
           <DatabaseIcon v-if="connection" :db-type="connectionIconType(connection)" class="h-3 w-3 shrink-0" />
           <Server v-else class="h-3 w-3 shrink-0" />
-          <Select :model-value="connection?.id || ''" @update:model-value="(v: any) => changeConnection(String(v ?? ''))">
+          <Select
+            :model-value="connection?.id || ''"
+            @update:model-value="
+              (v) => {
+                if (typeof v === 'string') changeConnection(v);
+              }
+            "
+          >
             <SelectTrigger class="h-5 w-auto border-0 rounded-md bg-transparent dark:bg-transparent p-0 px-1 text-xs text-foreground/80 shadow-none focus:ring-0 focus-visible:ring-0 [&_svg]:size-3">
               <SelectValue :placeholder="t('editor.selectConnection')">{{ connection?.name || t("editor.selectConnection") }}</SelectValue>
             </SelectTrigger>
@@ -842,7 +878,11 @@ const messageRenderer = computed(() => {
             <Database class="h-3 w-3 shrink-0 text-foreground/40" />
             <Select
               :model-value="selectedDatabaseSelectValue"
-              @update:model-value="(v: any) => changeDatabase(String(v ?? ''))"
+              @update:model-value="
+                (v) => {
+                  if (typeof v === 'string') changeDatabase(v);
+                }
+              "
               @update:open="
                 (open: boolean) => {
                   if (open) loadDatabases();

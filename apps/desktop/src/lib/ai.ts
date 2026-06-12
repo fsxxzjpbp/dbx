@@ -111,6 +111,7 @@ export async function runAgentStream(input: AiRequestInput, history: api.AiMessa
     input.context.database,
     input.context.databaseType,
     onEvent,
+    input.mode || "ask",
   );
 }
 
@@ -196,12 +197,14 @@ function buildBasePromptLines(isZh: boolean): string[] {
 function buildModePromptLines(mode: AiAssistantMode, isZh: boolean): string[] {
   if (mode === "agent") {
     return [
-      isZh ? "你处于 Agent 模式。用户表达查询意图时，优先生成一个可直接执行的只读 SQL。" : "You are in Agent mode. When the user expresses query intent, prioritize one directly executable read-only SQL statement.",
-      isZh ? "第一个 ```sql 代码块只能包含最终推荐执行的 SQL；不要把解释性 SQL、备选 SQL、危险 SQL 放在第一个代码块。" : "The first ```sql code block must contain only the final SQL recommended for execution; do not put explanatory SQL, alternatives, or risky SQL in the first code block.",
-      isZh ? "如果安全执行条件不满足，先说明原因，再给只读预览或澄清问题。" : "If safe execution requirements are not met, explain why first, then provide a read-only preview or a clarifying question.",
+      isZh ? "你处于 Agent 模式。你有以下工具可用：list_tables、get_columns、execute_query、get_sample_data。" : "You are in Agent mode. You have the following tools available: list_tables, get_columns, execute_query, get_sample_data.",
       isZh
-        ? "当用户问“有哪些表”“当前表列表”“表是否存在”这类元数据问题时，优先返回一个可执行的只读元数据 SQL，让系统执行后再基于结果回答。"
-        : "When the user asks metadata questions such as what tables exist, the current table list, or whether a table exists, prefer returning one executable read-only metadata SQL so the system can run it before answering from results.",
+        ? "用户提出数据查询意图时，必须调用 execute_query 工具执行 SQL，不要只输出 SQL 文本后停止。先用 list_tables/get_columns 了解 schema，再调用 execute_query 获取真实结果，最后基于结果回答用户。"
+        : "When the user expresses a data query intent, you MUST call the execute_query tool to run the SQL — do NOT just output SQL text and stop. Use list_tables/get_columns to understand the schema first, then call execute_query to get real results, then answer based on the actual data.",
+      isZh
+        ? "只有 SELECT、WITH、SHOW、DESCRIBE、EXPLAIN 可以通过 execute_query 执行。如果用户要求写入操作，先解释原因，不要执行。"
+        : "Only SELECT, WITH, SHOW, DESCRIBE, EXPLAIN can be executed via execute_query. If the user requests a write operation, explain why it is blocked instead of executing.",
+      isZh ? "如果安全执行条件不满足，先说明原因，再给只读预览或澄清问题。" : "If safe execution requirements are not met, explain why first, then provide a read-only preview or a clarifying question.",
     ];
   }
 

@@ -1,4 +1,4 @@
-use std::sync::Arc;
+﻿use std::sync::Arc;
 use tauri::{AppHandle, Emitter, State};
 
 use super::connection::AppState;
@@ -60,6 +60,7 @@ pub async fn ai_agent_stream(
     connection_id: String,
     database: String,
     db_type: String,
+    mode: Option<String>,
 ) -> Result<String, String> {
     let cancelled = dbx_core::ai::register_stream(&session_id).await;
 
@@ -67,6 +68,7 @@ pub async fn ai_agent_stream(
         serde_json::from_str(&format!("\"{}\"", db_type)).map_err(|_| format!("Unknown database type: {db_type}"))?;
 
     let agent_ctx = AgentLoopContext { state: state.inner().clone(), connection_id, database, db_type: parsed_db_type };
+    let is_agent_mode = mode.as_deref() == Some("agent");
 
     let result = run_agent_loop(
         &request.config,
@@ -82,6 +84,7 @@ pub async fn ai_agent_stream(
         &cancelled,
         request.max_tokens,
         request.temperature,
+        is_agent_mode,
     )
     .await;
 

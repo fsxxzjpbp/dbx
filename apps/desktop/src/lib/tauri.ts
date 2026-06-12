@@ -1,4 +1,4 @@
-import { invoke } from "@tauri-apps/api/core";
+﻿import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import type {
   ConnectionConfig,
@@ -288,7 +288,7 @@ export type AgentEvent =
   | { type: "agent_end"; total_tokens?: number }
   | { type: "error"; message: string };
 
-export async function aiAgentStream(sessionId: string, request: AiCompletionRequest, connectionId: string, database: string, dbType: string, onEvent: (event: AgentEvent) => void): Promise<string> {
+export async function aiAgentStream(sessionId: string, request: AiCompletionRequest, connectionId: string, database: string, dbType: string, onEvent: (event: AgentEvent) => void, mode?: string, _signal?: AbortSignal): Promise<string> {
   const unlisten: UnlistenFn = await listen<AgentEvent>("ai-agent-event", (event) => {
     onEvent(event.payload);
     if (event.payload.type === "agent_end" || event.payload.type === "error") {
@@ -296,7 +296,7 @@ export async function aiAgentStream(sessionId: string, request: AiCompletionRequ
     }
   });
   try {
-    return await invoke("ai_agent_stream", { sessionId, request, connectionId, database, dbType });
+    return await invoke("ai_agent_stream", { sessionId, request, connectionId, database, dbType, mode });
   } catch (e) {
     unlisten();
     throw e;

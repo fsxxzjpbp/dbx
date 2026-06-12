@@ -49,6 +49,7 @@ pub async fn run_agent_loop(
     cancelled: &Notify,
     max_tokens: Option<u32>,
     temperature: Option<f32>,
+    is_agent_mode: bool,
 ) -> Result<String, String> {
     // Auto-degrade: providers without function calling fall back to text-only completion.
     if !provider_supports_function_calling(config) {
@@ -64,7 +65,7 @@ pub async fn run_agent_loop(
         )
         .await;
     }
-    let tools = agent_tools::read_only_tools();
+    let tools = if is_agent_mode { agent_tools::all_tools() } else { agent_tools::read_only_tools() };
     let mut conversation_messages: Vec<AiMessage> = messages.to_vec();
     let mut final_text = String::new();
 
@@ -100,7 +101,8 @@ pub async fn run_agent_loop(
         };
 
         // Call the LLM with tool support
-        let collected_tool_calls = stream_with_tools(config, &request, &session_id, cancelled, on_chunk).await?;
+        let collected_tool_calls =
+            stream_with_tools(config, &request, &session_id, &tools, cancelled, on_chunk).await?;
 
         on_event(AgentEvent::TurnEnd { turn });
 
@@ -193,11 +195,10 @@ async fn stream_with_tools(
     config: &AiConfig,
     request: &AiCompletionRequest,
     session_id: &str,
+    tools: &[ToolDefinition],
     cancelled: &Notify,
     on_chunk: impl Fn(AiStreamChunk) + Send + Sync + 'static,
 ) -> Result<Vec<ToolCall>, String> {
-    let tools = agent_tools::read_only_tools();
-
     // Return early if the user cancelled before the LLM call started.
     if cancelled.notified().now_or_never().is_some() {
         return Err("Agent loop cancelled".to_string());
@@ -258,14 +259,14 @@ async fn build_schema_prompt(agent_ctx: &AgentLoopContext, system_prompt: &str) 
 
     match tables_result {
         Ok(tables) if !tables.is_empty() => {
-            enriched.push_str("\n\n## Database Schema (for context — no tools available)\n");
+            enriched.push_str("\n\n## Database Schema (for context 鈥?no tools available)\n");
             enriched.push_str(&format!("Database: {}\n", agent_ctx.database));
             enriched.push_str("Tables:\n");
             for t in &tables {
                 enriched.push_str(&format!("  - {} ({})", t.name, t.table_type));
                 if let Some(ref comment) = t.comment {
                     if !comment.trim().is_empty() {
-                        enriched.push_str(&format!(" — {}", comment.trim()));
+                        enriched.push_str(&format!(" 鈥?{}", comment.trim()));
                     }
                 }
                 enriched.push('\n');

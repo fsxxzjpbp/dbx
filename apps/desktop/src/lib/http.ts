@@ -1,4 +1,4 @@
-import type {
+﻿import type {
   ConnectionConfig,
   DatabaseInfo,
   TableInfo,
@@ -792,11 +792,11 @@ function isAgentEvent(v: unknown): v is import("./tauri").AgentEvent {
   return typeof v === "object" && v !== null && "type" in v && typeof (v as Record<string, unknown>).type === "string";
 }
 
-export async function aiAgentStream(sessionId: string, request: AiCompletionRequest, connectionId: string, database: string, dbType: string, onEvent: (event: import("./tauri").AgentEvent) => void, signal?: AbortSignal): Promise<string> {
+export async function aiAgentStream(sessionId: string, request: AiCompletionRequest, connectionId: string, database: string, dbType: string, onEvent: (event: import("./tauri").AgentEvent) => void, mode?: string, signal?: AbortSignal): Promise<string> {
   const res = await fetch("/api/ai/agent-stream", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ session_id: sessionId, request, connection_id: connectionId, database, db_type: dbType }),
+    body: JSON.stringify({ session_id: sessionId, request, connection_id: connectionId, database, db_type: dbType, mode: mode || "ask" }),
     signal,
   });
   if (!res.ok) throw new Error(await res.text());
@@ -1459,5 +1459,5 @@ export async function loadSidebarLayout(): Promise<SidebarLayout | null> {
 }
 
 export async function refreshConnections(): Promise<void> {
-  // Web mode doesn't maintain persistent connection pools — no-op
+  // Web mode doesn't maintain persistent connection pools 鈥?no-op
 }
