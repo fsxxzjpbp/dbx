@@ -963,7 +963,10 @@ export const useQueryStore = defineStore("query", () => {
 
   function setTableMeta(id: string, meta: NonNullable<QueryTab["tableMeta"]>) {
     const tab = tabs.value.find((t) => t.id === id);
-    if (tab) tab.tableMeta = meta;
+    if (tab) {
+      tab.tableMeta = meta;
+      tab.tableMetaUpdatedAt = Date.now();
+    }
   }
 
   function setObjectSource(id: string, objectSource: NonNullable<QueryTab["objectSource"]>) {
@@ -1282,13 +1285,17 @@ export const useQueryStore = defineStore("query", () => {
     let useAgentResultSession = false;
     try {
       const connStore = useConnectionStore();
+      console.info("[DBX][executeTabSql:ensure-connected:start]", { traceId, elapsed: elapsed() });
       await connStore.ensureConnected(tab.connectionId);
+      console.info("[DBX][executeTabSql:ensure-connected:done]", { traceId, elapsed: elapsed() });
       const conn = connStore.getConfig(tab.connectionId);
       const effectiveDbType = effectiveDatabaseTypeForConnection(conn);
       const useAgentCursor = conn?.db_type === "jdbc" || supportsDatabaseFeature(conn?.db_type, "driverManagement");
       const queryTimeoutSecs = queryTimeoutSecsForConnection(conn);
       const settingsStore = useSettingsStore();
+      console.info("[DBX][executeTabSql:previous-session-close:start]", { traceId, elapsed: elapsed() });
       await previousResultSessionClose;
+      console.info("[DBX][executeTabSql:previous-session-close:done]", { traceId, elapsed: elapsed() });
 
       // Redis command execution — split multi-line input into individual commands
       if (conn?.db_type === "redis") {
@@ -1547,6 +1554,12 @@ export const useQueryStore = defineStore("query", () => {
         timeoutSecs: queryTimeoutSecs,
       };
       const executionSchema = connectionUsesSchemaExecutionContext(conn) ? tab.schema || tab.database : tab.mode === "data" || connectionUsesDatabaseObjectTreeMode(conn) ? undefined : tab.schema;
+      console.info("[DBX][executeTabSql:execute-multi:invoke]", {
+        traceId,
+        elapsed: elapsed(),
+        executionSchema,
+        optionKeys: Object.keys(executionOptions),
+      });
       const executionPromise = api.executeMulti(tab.connectionId, tab.database, sqlToExecute, executionSchema, executionId, executionOptions);
       const frontendTimeoutSecs = Math.max(queryTimeoutSecs * 2, 60);
       const results = markQueryResultsRowsRaw(await withFrontendQueryTimeout(executionPromise, queryTimeoutSecs === 0 ? 0 : frontendTimeoutSecs, t("editor.queryTimeoutError", { seconds: frontendTimeoutSecs })));
