@@ -272,14 +272,14 @@ pnpm dev:web       # 前端
 pnpm dev:backend   # 后端
 ```
 
-[dbx-agents](https://github.com/t8y2/dbx-agents) 是独立仓库，存放 JDBC Agent 驱动开发工程。本地开发时建议克隆到 `dbx/` 同级目录下，用 IDE 打开父文件夹即可同时开发两个项目：
+JDBC Agent 驱动开发工程位于 `agents/` 目录：
 
 ```bash
-mkdir dbx-workspace && cd dbx-workspace
-git clone https://github.com/t8y2/dbx.git
-git clone https://github.com/t8y2/dbx-agents.git
-# 用 IDE 打开 dbx-workspace/ 即可同时开发两个项目
+cd agents
+./gradlew test
 ```
+
+本地驱动安装流程会优先查找 `agents/drivers/<db-type>/build/libs/` 下的构建产物。
 
 ### 构建
 

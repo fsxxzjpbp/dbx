@@ -128,7 +128,7 @@ fn replace_old_jre_dir(am: &AgentManager, path: &Path) -> Result<Option<PathBuf>
     }
 }
 
-const REGISTRY_PATH: &str = "https://github.com/t8y2/dbx-agents/releases/latest/download/agent-registry.json";
+const REGISTRY_PATH: &str = "https://github.com/t8y2/dbx/releases/download/agents-latest/agent-registry.json";
 const REGISTRY_R2_PATH: &str = "agents/agent-registry.json";
 
 static REGISTRY_CACHE: std::sync::LazyLock<tokio::sync::Mutex<Option<(std::time::Instant, AgentRegistry)>>> =
@@ -255,6 +255,9 @@ pub fn jre_needs_install(am: &AgentManager, registry: &AgentRegistry, jre_key: &
 
 pub fn local_agent_jar_candidates(db_type: &str) -> Vec<PathBuf> {
     let jar_name = format!("dbx-agent-{db_type}.jar");
+    let monorepo_driver =
+        PathBuf::from("agents").join("drivers").join(db_type).join("build").join("libs").join(&jar_name);
+    let monorepo_legacy = PathBuf::from("agents").join(db_type).join("build").join("libs").join(&jar_name);
     let relative_driver =
         PathBuf::from("..").join("dbx-agents").join("drivers").join(db_type).join("build").join("libs").join(&jar_name);
     let nested_driver =
@@ -262,7 +265,7 @@ pub fn local_agent_jar_candidates(db_type: &str) -> Vec<PathBuf> {
     let relative_legacy =
         PathBuf::from("..").join("dbx-agents").join(db_type).join("build").join("libs").join(&jar_name);
     let nested_legacy = PathBuf::from("dbx-agents").join(db_type).join("build").join("libs").join(&jar_name);
-    vec![relative_driver, nested_driver, relative_legacy, nested_legacy]
+    vec![monorepo_driver, monorepo_legacy, relative_driver, nested_driver, relative_legacy, nested_legacy]
 }
 
 pub fn find_local_agent_jar(db_type: &str) -> Option<PathBuf> {

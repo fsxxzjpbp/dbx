@@ -103,3 +103,86 @@ jobs:
 
       - name: JDBC plugin package check
         run: ./plugins/jdbc/package.sh
+
+  changes:
+    runs-on: ubuntu-22.04
+    outputs:
+      agents: ${{ steps.filter.outputs.agents }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Detect agent changes
+        id: filter
+        shell: bash
+        env:
+          BASE_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.event.before }}
+        run: |
+          if [ -z "$BASE_SHA" ] || echo "$BASE_SHA" | grep -Eq '^0+$' || ! git rev-parse --verify "$BASE_SHA^{commit}" >/dev/null 2>&1; then
+            if git rev-parse --verify HEAD^ >/dev/null 2>&1; then
+              BASE_SHA="HEAD^"
+            else
+              BASE_SHA="$(git hash-object -t tree /dev/null)"
+            fi
+          fi
+
+          if git diff --name-only "$BASE_SHA" HEAD -- agents/ | grep -q .; then
+            echo "agents=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "agents=false" >> "$GITHUB_OUTPUT"
+          fi
+
+  agents:
+    needs: changes
+    if: needs.changes.outputs.agents == 'true'
+    runs-on: ubuntu-22.04
+    defaults:
+      run:
+        working-directory: agents
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Setup Java
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: |
+            8
+            21
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.22.x"
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Agent script tests
+        run: python3 -m unittest discover -s scripts -p '*_test.py'
+
+      - name: Agent validation
+        run: python3 scripts/validate_agents.py
+
+      - name: Oracle native agent tests
+        run: go test ./...
+        working-directory: agents/drivers/oracle-go
+
+      - name: Xugu native agent tests
+        run: GONOSUMDB=gitee.com/XuguDB/go-xugu-driver go test ./...
+        working-directory: agents/drivers/xugu
+
+      - name: Oracle native agent build
+        run: CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags="-s -w" -o /tmp/dbx-agent-oracle-linux-x64 .
+        working-directory: agents/drivers/oracle-go
+
+      - name: Xugu native agent build
+        run: GONOSUMDB=gitee.com/XuguDB/go-xugu-driver CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags="-s -w" -o /tmp/dbx-agent-xugu-linux-x64 .
+        working-directory: agents/drivers/xugu
+
+      - name: Java agent tests and packages
+        run: ./gradlew test shadowJar --continue
+
+      - name: Agent jar validation
+        run: python3 scripts/validate_agent_jars.py
