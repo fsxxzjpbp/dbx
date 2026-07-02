@@ -300,15 +300,21 @@ impl MessageQueueAdmin for KafkaAdmin {
         .await
     }
 
-    async fn peek_messages(&self, topic: &TopicRef, _sub: &str, count: u32) -> Result<Vec<PeekedMessage>, String> {
+    async fn peek_messages(
+        &self,
+        topic: &TopicRef,
+        _sub: &str,
+        count: u32,
+        options: PeekMessagesOptions,
+    ) -> Result<Vec<PeekedMessage>, String> {
         let conn_params = build_connection_params(&self.config);
         let result: serde_json::Value = self
             .call(
                 "mq_peek_messages",
                 serde_json::json!({
                     "topic": topic.topic,
-                    "partition": 0,
-                    "offset": 0,
+                    "partition": options.partition.unwrap_or(0),
+                    "offset": options.offset.unwrap_or(0),
                     "count": count,
                     "connection": conn_params,
                 }),
@@ -347,7 +353,14 @@ impl MessageQueueAdmin for KafkaAdmin {
 
     async fn list_producers(&self, topic: &TopicRef) -> Result<Vec<ProducerInfo>, String> {
         let result: serde_json::Value =
-            self.call("mq_list_producers", serde_json::json!({ "topic": topic.topic })).await?;
+            match self.call("mq_list_producers", serde_json::json!({ "topic": topic.topic })).await {
+                Ok(result) => result,
+                Err(err) if is_describe_producers_unsupported(&err) => {
+                    log::info!("Kafka broker does not support DESCRIBE_PRODUCERS; active producers are unavailable");
+                    return Ok(Vec::new());
+                }
+                Err(err) => return Err(err),
+            };
         let producers = result.get("producers").and_then(|v| v.as_array()).cloned().unwrap_or_default();
         Ok(producers
             .into_iter()
@@ -381,7 +394,7 @@ impl MessageQueueAdmin for KafkaAdmin {
     }
 
     async fn unload_topic(&self, _topic: &TopicRef) -> Result<(), String> {
-        Err("Kafka does not support unloading topics".to_string())
+        Err("Kafka 不支持卸载主题".to_string())
     }
 
     // ---- Rate limits / quotas / retention ----
@@ -612,6 +625,12 @@ fn extra_str<'a>(extra: &'a serde_json::Value, key: &str) -> Option<&'a str> {
     extra.get(key).and_then(|v| v.as_str()).filter(|v| !v.trim().is_empty())
 }
 
+fn is_describe_producers_unsupported(message: &str) -> bool {
+    let normalized = message.to_ascii_lowercase();
+    (normalized.contains("unsupportedversionexception") && normalized.contains("describe_producers"))
+        || normalized.contains("the node does not support describe_producers")
+}
+
 /// Build the connection params JSON from MqAdminConfig for the Java agent.
 fn build_connection_params(cfg: &MqAdminConfig) -> serde_json::Value {
     let extra = &cfg.extra;
@@ -624,8 +643,11 @@ fn build_connection_params(cfg: &MqAdminConfig) -> serde_json::Value {
     let sasl_password =
         extra_str(extra, "saslPassword").or_else(|| basic_auth.map(|(_, password)| password)).unwrap_or("");
     let sasl_mechanism = extra_str(extra, "saslMechanism").unwrap_or(if basic_auth.is_some() { "PLAIN" } else { "" });
-    let security_protocol =
-        extra_str(extra, "securityProtocol").unwrap_or(if !sasl_mechanism.is_empty() { "SASL_PLAINTEXT" } else { "" });
+    let security_protocol = extra_str(extra, "securityProtocol").unwrap_or(if !sasl_mechanism.is_empty() {
+        "SASL_PLAINTEXT"
+    } else {
+        "PLAINTEXT"
+    });
     let properties =
         extra.get("properties").filter(|value| value.is_object()).cloned().unwrap_or_else(|| serde_json::json!({}));
 

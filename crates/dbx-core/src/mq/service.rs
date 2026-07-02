@@ -15,14 +15,27 @@ use uuid::Uuid;
 
 const MAX_PEEK_MESSAGES: u32 = 100;
 
-/// Test connectivity to the message queue admin endpoint. Builds a transient
-/// adapter (not cached) to avoid polluting the registry on failed attempts.
+/// Test connectivity to the message queue admin endpoint. Successful MQ
+/// adapters are cached so agent-backed systems do not cold-start on every
+/// repeated test. Failed builds are not cached by the registry.
 pub async fn mq_test_connection_core(state: &AppState, conn_id: &str) -> Result<MqClusterInfo, String> {
     let cfg = state.configs.read().await.get(conn_id).cloned().ok_or("Connection not found")?;
     let mqc = state.mq_admin_config_for_connection(conn_id, &cfg).await?;
     let kafka_launch = resolve_kafka_launch_spec(&mqc, state);
-    let adapter = state.mq_registry.build_transient_config(mqc, kafka_launch).await?;
-    adapter.test_connection().await
+    let adapter = match state.mq_registry.get_or_build_config(conn_id, mqc, kafka_launch).await {
+        Ok(adapter) => adapter,
+        Err(err) => {
+            state.mq_registry.drop_connection(conn_id).await;
+            return Err(err);
+        }
+    };
+    match adapter.test_connection().await {
+        Ok(info) => Ok(info),
+        Err(err) => {
+            state.mq_registry.drop_connection(conn_id).await;
+            Err(err)
+        }
+    }
 }
 
 // ---- Tenants ----
@@ -237,6 +250,7 @@ pub async fn mq_peek_messages_core(
     topic: TopicRef,
     sub: String,
     count: u32,
+    options: Option<PeekMessagesOptions>,
 ) -> Result<Vec<PeekedMessage>, String> {
     if count == 0 {
         return Ok(Vec::new());
@@ -245,7 +259,7 @@ pub async fn mq_peek_messages_core(
         return Err(format!("Peek message count must be between 1 and {MAX_PEEK_MESSAGES}"));
     }
     let adapter = get_adapter(state, conn_id).await?;
-    adapter.peek_messages(&topic, &sub, count).await
+    adapter.peek_messages(&topic, &sub, count, options.unwrap_or_default()).await
 }
 
 pub async fn mq_expire_messages_core(
@@ -666,6 +680,7 @@ mod tests {
             },
             "sub-a".to_string(),
             101,
+            None,
         )
         .await
         .expect_err("peek count above the service limit should fail");
