@@ -3985,6 +3985,16 @@ pub async fn get_table_ddl_core(
                 )
                 .await;
             }
+            if db_config.as_ref().is_some_and(|config| config.db_type == DatabaseType::Db2) {
+                return db2_agent_table_ddl(
+                    client,
+                    database,
+                    schema,
+                    table,
+                    agent_metadata_timeout(db_config.as_ref()),
+                )
+                .await;
+            }
             let mut client = client.lock().await;
             return client.get_table_ddl(database, schema, table, agent_metadata_timeout(db_config.as_ref())).await;
         }
@@ -4581,6 +4591,139 @@ fn append_oracle_comments_to_ddl(
         }
     }
     result
+}
+
+async fn db2_agent_table_ddl(
+    client: Arc<tokio::sync::Mutex<db::agent_driver::AgentDriverClient>>,
+    database: &str,
+    schema: &str,
+    table: &str,
+    timeout_duration: Option<Duration>,
+) -> Result<String, String> {
+    let mut client = client.lock().await;
+    let ddl = client.get_table_ddl::<String>(database, schema, table, timeout_duration).await?;
+    match append_db2_comments_to_ddl(&mut client, database, schema, table, &ddl, timeout_duration).await {
+        Ok(ddl) => Ok(ddl),
+        Err(error) => {
+            log::debug!(
+                "[schema][db2:get_table_ddl:comments-fallback-failed] schema={} table={} error={}",
+                schema,
+                table,
+                error
+            );
+            Ok(ddl)
+        }
+    }
+}
+
+async fn append_db2_comments_to_ddl(
+    client: &mut db::agent_driver::AgentDriverClient,
+    database: &str,
+    schema: &str,
+    table: &str,
+    ddl: &str,
+    timeout_duration: Option<Duration>,
+) -> Result<String, String> {
+    let table_comment = db2_table_comment(client, database, schema, table, timeout_duration).await;
+    let column_comments = db2_column_comments(client, database, schema, table, timeout_duration).await;
+    let mut columns =
+        client.get_columns::<Vec<db::ColumnInfo>>(database, schema, table, timeout_duration).await.unwrap_or_default();
+    if !column_comments.is_empty() {
+        for column in &mut columns {
+            if column.comment.as_deref().is_none_or(|c| c.trim().is_empty() || c.trim().eq_ignore_ascii_case("null")) {
+                if let Some(remark) = column_comments.get(&column.name.to_uppercase()) {
+                    column.comment = Some(remark.clone());
+                }
+            }
+        }
+    }
+    Ok(append_oracle_comments_to_ddl(ddl, schema, table, table_comment.as_deref(), &columns))
+}
+
+async fn db2_table_comment(
+    client: &mut db::agent_driver::AgentDriverClient,
+    database: &str,
+    schema: &str,
+    table: &str,
+    timeout_duration: Option<Duration>,
+) -> Option<String> {
+    // 优先使用原始值查询，支持 quoted/mixed-case 对象；如果查不到再 fallback 到大写
+    for (schema_name, table_name) in
+        [(schema.trim(), table.trim()), (&schema.trim().to_uppercase(), &table.trim().to_uppercase())]
+    {
+        let schema_filter = if schema_name.is_empty() { "CURRENT SCHEMA".to_string() } else { sql_string(schema_name) };
+        let sql = format!(
+            "SELECT REMARKS FROM SYSCAT.TABLES WHERE TABSCHEMA = {} AND TABNAME = {} AND REMARKS IS NOT NULL",
+            schema_filter,
+            sql_string(table_name),
+        );
+        if let Ok(result) = client
+            .execute_query_with_timeout::<db::QueryResult>(
+                agent_execute_query_params(
+                    &sql,
+                    if database.is_empty() { None } else { Some(database) },
+                    if schema.is_empty() { None } else { Some(schema) },
+                    QueryExecutionOptions { max_rows: Some(1), ..Default::default() },
+                ),
+                timeout_duration,
+            )
+            .await
+        {
+            if let Some(comment) =
+                result.rows.first().and_then(|row| row.first()).and_then(|v| v.as_str()).map(|s| s.to_string())
+            {
+                return Some(comment);
+            }
+        }
+    }
+    None
+}
+
+async fn db2_column_comments(
+    client: &mut db::agent_driver::AgentDriverClient,
+    database: &str,
+    schema: &str,
+    table: &str,
+    timeout_duration: Option<Duration>,
+) -> HashMap<String, String> {
+    // 优先使用原始值查询，支持 quoted/mixed-case 对象；如果查不到再 fallback 到大写
+    let mut comments = HashMap::new();
+    for (schema_name, table_name) in
+        [(schema.trim(), table.trim()), (&schema.trim().to_uppercase(), &table.trim().to_uppercase())]
+    {
+        let schema_filter = if schema_name.is_empty() { "CURRENT SCHEMA".to_string() } else { sql_string(schema_name) };
+        let sql = format!(
+            "SELECT COLNAME, REMARKS FROM SYSCAT.COLUMNS WHERE TABSCHEMA = {} AND TABNAME = {} AND REMARKS IS NOT NULL",
+            schema_filter,
+            sql_string(table_name),
+        );
+        let result = match client
+            .execute_query_with_timeout::<db::QueryResult>(
+                agent_execute_query_params(
+                    &sql,
+                    if database.is_empty() { None } else { Some(database) },
+                    if schema.is_empty() { None } else { Some(schema) },
+                    QueryExecutionOptions { ..Default::default() },
+                ),
+                timeout_duration,
+            )
+            .await
+        {
+            Ok(result) => result,
+            Err(_) => continue,
+        };
+        for row in &result.rows {
+            let col_name = row.first().and_then(|v| v.as_str()).unwrap_or("").trim();
+            let remark = row.get(1).and_then(|v| v.as_str()).unwrap_or("").trim();
+            if !col_name.is_empty() && !remark.is_empty() {
+                comments.entry(col_name.to_uppercase()).or_insert_with(|| remark.to_string());
+            }
+        }
+        if !comments.is_empty() {
+            break;
+        }
+    }
+    comments
 }
 
 async fn postgres_object_source(
