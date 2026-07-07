@@ -68,6 +68,7 @@ export interface SqlSnippet {
   label: string;
   prefix: string;
   body: string;
+  enabled?: boolean;
 }
 
 export type CompletionAssistantObjectKind = "database" | "schema" | "table" | "view" | "routine" | "procedure" | "function" | "column";
