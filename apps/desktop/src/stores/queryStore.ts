@@ -1754,25 +1754,28 @@ export const useQueryStore = defineStore("query", () => {
     closeTabsWhere((tab) => tabMatchesDroppedTableObject(tab, target));
   }
 
-  async function refreshDataTabsForTable(target: TableDataRefreshTarget): Promise<number> {
-    const matchingTabs = tabs.value.filter((tab) => tabMatchesTableDataRefreshTarget(tab, target));
-    if (matchingTabs.length === 0) return 0;
+  async function refreshDataTabInternal(id: string, options?: { supersedeBusy?: boolean; propagateBuildError?: boolean }): Promise<boolean> {
+    const tab = tabs.value.find((candidate) => candidate.id === id);
+    if (!tab || tab.mode !== "data" || (tab.isExecuting && !options?.supersedeBusy)) return false;
+    const tableMeta = tableMetaForDataTab(tab);
+    if (!tableMeta?.tableName) return false;
 
     const settingsStore = useSettingsStore();
-    let refreshed = 0;
+    const connStore = useConnectionStore();
+    const conn = connStore.getConfig(tab.connectionId);
+    const effectiveDbType = effectiveDatabaseTypeForConnection(conn);
+    const identifierQuote = connStore.connectionIdentifierQuote?.(tab.connectionId);
+    const primaryKeys = tab.tableMeta ? tab.tableMeta.primaryKeys : tableMeta.primaryKeys;
+    const sortOrder = tab.resultSortColumn && tab.resultSortDirection ? `${quoteTableDataIdentifier(effectiveDbType, tab.resultSortColumn, identifierQuote)} ${tab.resultSortDirection.toUpperCase()}` : undefined;
+    const orderBy = tab.orderByInput?.trim() || sortOrder;
+    const limit = tab.resultPageLimit ?? settingsStore.editorSettings.pageSize ?? tableOpenPageLimit();
+    const offset = tab.resultPageOffset ?? 0;
+    const refreshPreparationId = uuid();
 
-    for (const tab of matchingTabs) {
-      const tableMeta = tableMetaForDataTab(tab);
-      if (!tableMeta?.tableName) continue;
-      const connStore = useConnectionStore();
-      const conn = connStore.getConfig(tab.connectionId);
-      const effectiveDbType = effectiveDatabaseTypeForConnection(conn);
-      const identifierQuote = connStore.connectionIdentifierQuote?.(tab.connectionId);
-      const primaryKeys = tab.tableMeta ? tab.tableMeta.primaryKeys : tableMeta.primaryKeys;
-      const sortOrder = tab.resultSortColumn && tab.resultSortDirection ? `${quoteTableDataIdentifier(effectiveDbType, tab.resultSortColumn, identifierQuote)} ${tab.resultSortDirection.toUpperCase()}` : undefined;
-      const orderBy = tab.orderByInput?.trim() || sortOrder;
-      const limit = tab.resultPageLimit ?? settingsStore.editorSettings.pageSize ?? tableOpenPageLimit();
-      const offset = tab.resultPageOffset ?? 0;
+    // Reserve the tab synchronously before SQL construction yields so repeated
+    // refresh requests cannot build and execute duplicate queries.
+    setExecutingWithId(tab.id, refreshPreparationId);
+    try {
       const sql = await buildTableSelectSql({
         databaseType: effectiveDbType,
         identifierQuote,
@@ -1789,12 +1792,34 @@ export const useQueryStore = defineStore("query", () => {
         limit,
         offset,
       });
+      if (!sql.trim()) throw new Error("Failed to build table refresh SQL");
+      const current = tabs.value.find((candidate) => candidate.id === id);
+      if (!current || current.executionId !== refreshPreparationId) return false;
       updateSql(tab.id, sql);
       await executeTabSql(tab.id, sql, {
         pagination: { limit, offset },
         preserveResultDuringExecution: true,
       });
-      refreshed += 1;
+      return true;
+    } catch (error) {
+      const current = tabs.value.find((candidate) => candidate.id === id);
+      if (current?.executionId === refreshPreparationId) setErrorResult(id, error);
+      if (options?.propagateBuildError) throw error;
+      return false;
+    }
+  }
+
+  function refreshDataTab(id: string): Promise<boolean> {
+    return refreshDataTabInternal(id);
+  }
+
+  async function refreshDataTabsForTable(target: TableDataRefreshTarget): Promise<number> {
+    const matchingTabs = tabs.value.filter((tab) => tabMatchesTableDataRefreshTarget(tab, target));
+    if (matchingTabs.length === 0) return 0;
+
+    let refreshed = 0;
+    for (const tab of matchingTabs) {
+      if (await refreshDataTabInternal(tab.id, { supersedeBusy: true, propagateBuildError: true })) refreshed += 1;
     }
 
     return refreshed;
@@ -4036,6 +4061,7 @@ export const useQueryStore = defineStore("query", () => {
     closeConnectionTabs,
     closeDatabaseTabs,
     closeDroppedTableObjectTabs,
+    refreshDataTab,
     refreshDataTabsForTable,
     releaseConnectionTabs,
     releaseDatabaseTabs,
